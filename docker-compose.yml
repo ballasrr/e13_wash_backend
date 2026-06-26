@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: e13_postgres
+    environment:
+      POSTGRES_USER: e13user
+      POSTGRES_PASSWORD: e13asko
+      POSTGRES_DB: e13wash
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: e13_clickhouse
+    environment:
+      CLICKHOUSE_USER: e13user
+      CLICKHOUSE_PASSWORD: e13asko
+      CLICKHOUSE_DB: e13wash_logs
+    ports:
+      - "9000:9000"
+      - "8123:8123"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+
+  redis:
+    image: redis:7
+    container_name: e13_redis
+    command: redis-server --requirepass e13asko
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  backend:
+    build: .
+    container_name: e13_backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - clickhouse
+      - redis
+    volumes:
+      - .:/app
+
+volumes:
+  postgres_data:
+  clickhouse_data:
+  redis_data:
