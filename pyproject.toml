@@ -5,11 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "alembic>=1.18.5",
     "asyncpg>=0.31.0",
     "clickhouse-driver>=0.2.10",
     "fastapi>=0.138.0",
     "httpx>=0.28.1",
+    "psycopg2-binary>=2.9.12",
+    "pydantic-settings>=2.14.2",
     "python-dotenv>=1.2.2",
     "redis>=8.0.1",
     "sqlalchemy>=2.0.51",
