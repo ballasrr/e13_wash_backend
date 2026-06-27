@@ -46,9 +46,7 @@ services:
       - redis
     volumes:
       - .:/app
-    command: >
-      sh -c "alembic upgrade head &&
-             uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
   postgres_data:
