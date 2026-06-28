@@ -8,6 +8,7 @@ from app.services.crestwave import (
     get_post_status,
     get_events
 )
+from app.db.clickhouse import save_device_events, save_program_launches
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -31,22 +32,22 @@ def get_period(period: str):
     return start, end
 
 
-@router.get("/machines")
+@router.get("/machines", summary="Список всех моек")
 async def machines():
     return await get_machines()
 
 
-@router.get("/machines/{machine_id}/status")
+@router.get("/machines/{machine_id}/status", summary="Статус устройства онлайн/офлайн")
 async def machine_status(machine_id: int):
     return await get_device_status(machine_id)
 
 
-@router.get("/machines/{machine_id}/post-status")
+@router.get("/machines/{machine_id}/post-status", summary="Статус поста свободен/занят")
 async def post_status(machine_id: int):
     return await get_post_status(machine_id)
 
 
-@router.get("/report")
+@router.get("/report", summary="Финансовый отчёт по мойкам")
 async def financial_report(
     period: str = "today",
     machine_id: int = None,
@@ -54,10 +55,10 @@ async def financial_report(
     end: str = None
 ):
     machines_data = await get_machines()
-    machines = machines_data.get("machines", [])
+    all_machines = machines_data.get("machines", [])
 
     if machine_id:
-        machines = [m for m in machines if m["id"] == machine_id]
+        all_machines = [m for m in all_machines if m["id"] == machine_id]
 
     if start and end:
         period_start, period_end = start, end
@@ -65,7 +66,7 @@ async def financial_report(
         period_start, period_end = get_period(period)
 
     result = []
-    for machine in machines:
+    for machine in all_machines:
         report = await get_summary_report(machine["serial"], period_start, period_end)
 
         totals = {"cash": 0, "cashless": 0, "qr": 0, "mobileApp": 0}
@@ -95,7 +96,7 @@ async def financial_report(
     }
 
 
-@router.get("/launches/{machine_id}")
+@router.get("/launches/{machine_id}", summary="Запуски программ мойки за период")
 async def program_launches(
     machine_id: int,
     period: str = "today",
@@ -109,7 +110,7 @@ async def program_launches(
     return await get_program_launches(machine_id, period_start, period_end)
 
 
-@router.get("/events/{machine_id}")
+@router.get("/events/{machine_id}", summary="Журнал событий устройства")
 async def device_events(
     machine_id: int,
     period: str = "today",
@@ -121,3 +122,77 @@ async def device_events(
     else:
         period_start, period_end = get_period(period)
     return await get_events(machine_id, period_start, period_end)
+
+
+@router.post("/sync/{machine_id}", summary="Синхронизировать данные мойки в ClickHouse")
+async def sync_machine_data(
+    machine_id: int,
+    period: str = "today",
+    start: str = None,
+    end: str = None
+):
+    machines_data = await get_machines()
+    all_machines = machines_data.get("machines", [])
+    machine = next((m for m in all_machines if m["id"] == machine_id), None)
+
+    if not machine:
+        return {"error": "Мойка не найдена"}
+
+    if start and end:
+        period_start, period_end = start, end
+    else:
+        period_start, period_end = get_period(period)
+
+    events_data = await get_events(machine_id, period_start, period_end)
+    events = events_data.get("events", [])
+    save_device_events(machine_id, machine["name"], events)
+
+    launches_data = await get_program_launches(machine_id, period_start, period_end)
+    launches = launches_data.get("program_launches", [])
+    save_program_launches(machine_id, machine["name"], launches)
+
+    return {
+        "status": "ok",
+        "machine_id": machine_id,
+        "events_saved": len(events),
+        "launches_saved": len(launches),
+        "period": {"start": period_start, "end": period_end}
+    }
+
+
+@router.post("/sync/all", summary="Синхронизировать все мойки в ClickHouse")
+async def sync_all_machines(
+    period: str = "today",
+    start: str = None,
+    end: str = None
+):
+    machines_data = await get_machines()
+    all_machines = machines_data.get("machines", [])
+
+    if start and end:
+        period_start, period_end = start, end
+    else:
+        period_start, period_end = get_period(period)
+
+    results = []
+    for machine in all_machines:
+        events_data = await get_events(machine["id"], period_start, period_end)
+        events = events_data.get("events", [])
+        save_device_events(machine["id"], machine["name"], events)
+
+        launches_data = await get_program_launches(machine["id"], period_start, period_end)
+        launches = launches_data.get("program_launches", [])
+        save_program_launches(machine["id"], machine["name"], launches)
+
+        results.append({
+            "machine_id": machine["id"],
+            "machine_name": machine["name"],
+            "events_saved": len(events),
+            "launches_saved": len(launches),
+        })
+
+    return {
+        "status": "ok",
+        "period": {"start": period_start, "end": period_end},
+        "machines": results
+    }
