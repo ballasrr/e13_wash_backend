@@ -13,7 +13,7 @@ def get_today_period():
     return start, end
 
 
-@celery_app.task(name="app.celery.tasks.sync_all_machines_task")
+@celery_app.task(name="app.worker.tasks.sync_all_machines_task")
 def sync_all_machines_task():
     """Синхронизировать данные всех моек в ClickHouse"""
     loop = asyncio.new_event_loop()

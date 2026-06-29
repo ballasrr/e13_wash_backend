@@ -52,7 +52,7 @@ services:
   celery_worker:
     build: .
     container_name: e13_celery_worker
-    command: uv run celery -A app.worker.celary_app worker --loglevel=info
+    command: uv run celery -A app.worker.celary_app worker --loglevel=info --pool=solo
     env_file:
       - .env
     depends_on:

@@ -68,19 +68,19 @@ def save_device_events(machine_id: int, machine_name: str, events: list):
         except:
             event_date = datetime.now()
 
-        rows.append({
-            "id": event.get("id", 0),
-            "machine_id": machine_id,
-            "machine_name": machine_name,
-            "description": event.get("description", ""),
-            "event_date": event_date,
-            "status": event.get("status", ""),
-            "event_type": event.get("type", ""),
-            "params": str(event.get("params", "")),
-            "session_id": str(event.get("session_id", "")),
-        })
+        rows.append((
+            event.get("id", 0),
+            machine_id,
+            machine_name,
+            event.get("description", ""),
+            event_date,
+            event.get("status", ""),
+            event.get("type", ""),
+            str(event.get("params", "")),
+            str(event.get("session_id", "") or ""),
+        ))
 
-    client.execute("INSERT INTO device_events VALUES", rows)
+    client.execute("INSERT INTO device_events (id, machine_id, machine_name, description, event_date, status, event_type, params, session_id) VALUES", rows)
     client.disconnect()
 
 
@@ -101,20 +101,20 @@ def save_program_launches(machine_id: int, machine_name: str, launches: list):
         except:
             event_date = datetime.now()
 
-        rows.append({
-            "machine_id": machine_id,
-            "machine_name": machine_name,
-            "program_id": str(details.get("program_id", "")),
-            "program_name": details.get("program_name", ""),
-            "program_price": float(details.get("program_price", 0)),
-            "cash_amount": float(payment.get("cash_payment_amt", 0)),
-            "card_amount": float(payment.get("card_payment_amt", 0)),
-            "bonus_amount": float(payment.get("bonus_account_amt", 0)),
-            "qr_amount": float(payment.get("qr_payment_amt", 0)),
-            "total_amount": float(launch.get("payment_type_description", {}).get("total_amt", 0)),
-            "loyalty_msisdn": details.get("loyalty_msisdn", ""),
-            "event_date": event_date,
-        })
+        rows.append((
+            machine_id,
+            machine_name,
+            str(details.get("program_id", "")),
+            details.get("program_name", ""),
+            float(details.get("program_price", 0) or 0),
+            float(payment.get("cash_payment_amt", 0) or 0),
+            float(payment.get("card_payment_amt", 0) or 0),
+            float(payment.get("bonus_account_amt", 0) or 0),
+            float(payment.get("qr_payment_amt", 0) or 0),
+            float(launch.get("payment_type_description", {}).get("total_amt", 0) or 0),
+            details.get("loyalty_msisdn", "") or "",
+            event_date,
+        ))
 
-    client.execute("INSERT INTO program_launches VALUES", rows)
+    client.execute("INSERT INTO program_launches (machine_id, machine_name, program_id, program_name, program_price, cash_amount, card_amount, bonus_amount, qr_amount, total_amount, loyalty_msisdn, event_date) VALUES", rows)
     client.disconnect()
