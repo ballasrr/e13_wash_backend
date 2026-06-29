@@ -1,5 +1,5 @@
 from celery import Celery
-from celery.schedules import crontab
+from celery.schedules import timedelta
 
 celery_app = Celery(
     "e13wash",
@@ -9,9 +9,9 @@ celery_app = Celery(
 )
 
 celery_app.conf.beat_schedule = {
-    "sync-all-machines-every-hour": {
-        "task": "app.worker.tasks.sync_all_machines_task",  # исправлено
-        "schedule": crontab(minute=0, hour="*"),
+    "sync-all-machines-every-minute": {
+        "task": "app.worker.tasks.sync_all_machines_task",
+        "schedule": timedelta(minutes=1),  # каждую минуту
     },
 }
 
