@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.db.clickhouse import init_clickhouse
-from app.routers.v1 import admin
+from app.routers.v1 import admin, analytics
 
 
 @asynccontextmanager
@@ -10,13 +10,10 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(
-    title="E13-WASH API",
-    version="1.0.0",
-    lifespan=lifespan
-)
+app = FastAPI(title="E13-WASH API", version="1.0.0", lifespan=lifespan)
 
 app.include_router(admin.router, prefix="/api/v1")
+app.include_router(analytics.router, prefix="/api/v1")
 
 
 @app.get("/")
