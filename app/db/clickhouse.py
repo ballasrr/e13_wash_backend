@@ -28,8 +28,8 @@ def init_clickhouse():
             params String,
             session_id String,
             created_at DateTime DEFAULT now()
-        ) ENGINE = MergeTree()
-        ORDER BY (machine_id, event_date)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        ORDER BY (machine_id, event_date, id)
     """)
 
     client.execute("""
@@ -47,8 +47,8 @@ def init_clickhouse():
             loyalty_msisdn String,
             event_date DateTime,
             created_at DateTime DEFAULT now()
-        ) ENGINE = MergeTree()
-        ORDER BY (machine_id, event_date)
+        ) ENGINE = ReplacingMergeTree(created_at)
+        ORDER BY (machine_id, event_date, program_id)
     """)
 
     client.disconnect()
@@ -80,7 +80,10 @@ def save_device_events(machine_id: int, machine_name: str, events: list):
             str(event.get("session_id", "") or ""),
         ))
 
-    client.execute("INSERT INTO device_events (id, machine_id, machine_name, description, event_date, status, event_type, params, session_id) VALUES", rows)
+    client.execute(
+        "INSERT INTO device_events (id, machine_id, machine_name, description, event_date, status, event_type, params, session_id) VALUES",
+        rows
+    )
     client.disconnect()
 
 
@@ -116,5 +119,8 @@ def save_program_launches(machine_id: int, machine_name: str, launches: list):
             event_date,
         ))
 
-    client.execute("INSERT INTO program_launches (machine_id, machine_name, program_id, program_name, program_price, cash_amount, card_amount, bonus_amount, qr_amount, total_amount, loyalty_msisdn, event_date) VALUES", rows)
+    client.execute(
+        "INSERT INTO program_launches (machine_id, machine_name, program_id, program_name, program_price, cash_amount, card_amount, bonus_amount, qr_amount, total_amount, loyalty_msisdn, event_date) VALUES",
+        rows
+    )
     client.disconnect()
