@@ -5,7 +5,7 @@ celery_app = Celery(
     "e13wash", # имя приложения
     broker="redis://:e13asko@redis:6379/0", # куда отправлять задачи
     backend="redis://:e13asko@redis:6379/0", # куда сохранять результаты
-    include=["app.tasks"] # где искать задачи
+    include=["app.worker.tasks"]# где искать задачи
 )
 
 celery_app.conf.beat_schedule = {

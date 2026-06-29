@@ -1,4 +1,4 @@
-from app.celery.celary_app import celery_app
+from app.worker.celary_app import celery_app
 from app.services.crestwave import get_machines, get_events, get_program_launches
 from app.db.clickhouse import save_device_events, save_program_launches
 from datetime import datetime
