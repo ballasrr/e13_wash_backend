@@ -8,7 +8,10 @@ from app.services.crestwave import (
     get_post_status,
     get_events
 )
-from app.db.clickhouse import save_device_events, save_program_launches
+from app.db.clickhouse import save_device_events, save_program_launches, save_financial_report
+from app.worker.tasks import sync_historical_task
+from app.worker.celary_app import celery_app
+from celery.result import AsyncResult
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -124,39 +127,23 @@ async def device_events(
     return await get_events(machine_id, period_start, period_end)
 
 
-@router.post("/sync/{machine_id}", summary="Синхронизировать данные мойки в ClickHouse")
-async def sync_machine_data(
-    machine_id: int,
-    period: str = "today",
-    start: str = None,
-    end: str = None
-):
+@router.get("/debug/summary/{machine_id}", summary="Сырые данные summary-reports для отладки")
+async def debug_summary(machine_id: int, start: str, end: str):
     machines_data = await get_machines()
     all_machines = machines_data.get("machines", [])
     machine = next((m for m in all_machines if m["id"] == machine_id), None)
-
     if not machine:
-        return {"error": "Мойка не найдена"}
-
-    if start and end:
-        period_start, period_end = start, end
-    else:
-        period_start, period_end = get_period(period)
-
-    events_data = await get_events(machine_id, period_start, period_end)
-    events = events_data.get("events", [])
-    save_device_events(machine_id, machine["name"], events)
-
-    launches_data = await get_program_launches(machine_id, period_start, period_end)
-    launches = launches_data.get("program_launches", [])
-    save_program_launches(machine_id, machine["name"], launches)
-
+        return {"error": "not found"}
+    report = await get_summary_report(machine["serial"], start, end)
+    types = {}
+    if isinstance(report, list):
+        for item in report:
+            t = item.get("washerReportType")
+            types[t] = types.get(t, 0) + (item.get("amount") or 0)
     return {
-        "status": "ok",
-        "machine_id": machine_id,
-        "events_saved": len(events),
-        "launches_saved": len(launches),
-        "period": {"start": period_start, "end": period_end}
+        "total_records": len(report) if isinstance(report, list) else 0,
+        "types_summary": types,
+        "sample": report[:3] if isinstance(report, list) else report
     }
 
 
@@ -184,6 +171,9 @@ async def sync_all_machines(
         launches = launches_data.get("program_launches", [])
         save_program_launches(machine["id"], machine["name"], launches)
 
+        report = await get_summary_report(machine["serial"], period_start, period_end)
+        save_financial_report(machine["id"], machine["name"], report)
+
         results.append({
             "machine_id": machine["id"],
             "machine_name": machine["name"],
@@ -195,4 +185,93 @@ async def sync_all_machines(
         "status": "ok",
         "period": {"start": period_start, "end": period_end},
         "machines": results
+    }
+
+
+@router.post("/sync/summary/{machine_id}", summary="Синхронизировать финансовую сводку (с QR) в ClickHouse")
+async def sync_summary(
+    machine_id: int,
+    start: str,
+    end: str
+):
+    machines_data = await get_machines()
+    all_machines = machines_data.get("machines", [])
+    machine = next((m for m in all_machines if m["id"] == machine_id), None)
+
+    if not machine:
+        return {"error": "Мойка не найдена"}
+
+    report = await get_summary_report(machine["serial"], start, end)
+    save_financial_report(machine_id, machine["name"], report)
+
+    return {
+        "status": "ok",
+        "machine_id": machine_id,
+        "period": {"start": start, "end": end},
+        "records": len(report) if isinstance(report, list) else 0
+    }
+
+
+@router.post("/sync/historical-async/{machine_id}", summary="Запустить историческую синхронизацию в фоне")
+async def sync_historical_async(
+    machine_id: int,
+    start_date: str,
+    end_date: str
+):
+    task = sync_historical_task.delay(machine_id, start_date, end_date)
+    return {"task_id": task.id, "status": "started"}
+
+
+@router.get("/sync/status/{task_id}", summary="Проверить прогресс синхронизации")
+async def sync_status(task_id: str):
+    result = AsyncResult(task_id, app=celery_app)
+
+    if result.state == "PENDING":
+        return {"state": "pending"}
+    elif result.state == "PROGRESS":
+        return {"state": "in_progress", **result.info}
+    elif result.state == "SUCCESS":
+        return {"state": "completed", **result.result}
+    elif result.state == "FAILURE":
+        return {"state": "failed", "error": str(result.info)}
+
+    return {"state": result.state}
+
+
+@router.post("/sync/{machine_id}", summary="Синхронизировать данные мойки в ClickHouse")
+async def sync_machine_data(
+    machine_id: int,
+    period: str = "today",
+    start: str = None,
+    end: str = None
+):
+    machines_data = await get_machines()
+    all_machines = machines_data.get("machines", [])
+    machine = next((m for m in all_machines if m["id"] == machine_id), None)
+
+    if not machine:
+        return {"error": "Мойка не найдена"}
+
+    if start and end:
+        period_start, period_end = start, end
+    else:
+        period_start, period_end = get_period(period)
+
+    events_data = await get_events(machine_id, period_start, period_end)
+    events = events_data.get("events", [])
+    save_device_events(machine_id, machine["name"], events)
+
+    launches_data = await get_program_launches(machine_id, period_start, period_end)
+    launches = launches_data.get("program_launches", [])
+    save_program_launches(machine_id, machine["name"], launches)
+
+    report = await get_summary_report(machine["serial"], period_start, period_end)
+    save_financial_report(machine_id, machine["name"], report)
+
+    return {
+        "status": "ok",
+        "machine_id": machine_id,
+        "events_saved": len(events),
+        "launches_saved": len(launches),
+        "period": {"start": period_start, "end": period_end}
     }

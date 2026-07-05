@@ -37,7 +37,8 @@ async def get_launches(
             cash_amount,
             card_amount,
             bonus_amount,
-            qr_amount,
+            cloud_amount,
+            loyalty_card_amount,
             total_amount,
             loyalty_msisdn,
             event_date
@@ -60,10 +61,11 @@ async def get_launches(
                 "cash_amount": r[4],
                 "card_amount": r[5],
                 "bonus_amount": r[6],
-                "qr_amount": r[7],
-                "total_amount": r[8],
-                "loyalty_msisdn": r[9],
-                "event_date": r[10].isoformat() if r[10] else None,
+                "cloud_amount": r[7],
+                "loyalty_card_amount": r[8],
+                "total_amount": r[9],
+                "loyalty_msisdn": r[10],
+                "event_date": r[11].isoformat() if r[11] else None,
             }
             for r in rows
         ]
@@ -144,7 +146,7 @@ async def get_stats(
             SUM(cash_amount) as cash_revenue,
             SUM(card_amount) as card_revenue,
             SUM(bonus_amount) as bonus_revenue,
-            SUM(qr_amount) as qr_revenue,
+            SUM(cloud_amount) as cloud_revenue,
             AVG(total_amount) as avg_check
         FROM program_launches
         WHERE {where}
@@ -165,7 +167,7 @@ async def get_stats(
                 "cash_revenue": round(r[4], 2),
                 "card_revenue": round(r[5], 2),
                 "bonus_revenue": round(r[6], 2),
-                "qr_revenue": round(r[7], 2),
+                "cloud_revenue": round(r[7], 2),
                 "avg_check": round(r[8], 2),
             }
             for r in rows
@@ -216,6 +218,7 @@ async def get_top_programs(
             for r in rows
         ]
     }
+
 
 @router.get("/errors", summary="Ошибки устройств")
 async def get_errors(
@@ -302,6 +305,64 @@ async def get_errors_summary(
                 "event_type": r[2],
                 "error_count": r[3],
                 "last_error": r[4].isoformat() if r[4] else None,
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.get("/daily-summary", summary="Финансовая сводка по дням (с корректным QR)")
+async def get_daily_summary(
+    machine_id: int = None,
+    start: str = None,
+    end: str = None
+):
+    if not start or not end:
+        now = datetime.now()
+        start = now.replace(day=1).strftime("%Y-%m-%d")
+        end = now.strftime("%Y-%m-%d")
+
+    client = get_clickhouse()
+
+    where = f"report_date BETWEEN '{start}' AND '{end}'"
+    if machine_id:
+        where += f" AND machine_id = {machine_id}"
+
+    rows = client.execute(f"""
+        SELECT
+            report_date,
+            SUM(total) as total,
+            SUM(cash) as cash,
+            SUM(cashless) as cashless,
+            SUM(qr) as qr,
+            SUM(mobile_app) as mobile_app
+        FROM daily_summary
+        WHERE {where}
+        GROUP BY report_date
+        ORDER BY report_date DESC
+    """)
+
+    client.disconnect()
+
+    summary_row = {
+        "date": "Всего",
+        "total": sum(r[1] for r in rows),
+        "cash": sum(r[2] for r in rows),
+        "cashless": sum(r[3] for r in rows),
+        "qr": sum(r[4] for r in rows),
+        "mobile_app": sum(r[5] for r in rows),
+    }
+
+    return {
+        "summary": summary_row,
+        "days": [
+            {
+                "date": r[0].strftime("%m-%d"),
+                "total": r[1],
+                "cash": r[2],
+                "cashless": r[3],
+                "qr": r[4],
+                "mobile_app": r[5],
             }
             for r in rows
         ]
