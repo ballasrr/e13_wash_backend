@@ -18,6 +18,7 @@ services:
       CLICKHOUSE_USER: e13user
       CLICKHOUSE_PASSWORD: e13asko
       CLICKHOUSE_DB: e13wash_logs
+      TZ: Europe/Moscow
     ports:
       - "9000:9000"
       - "8123:8123"
@@ -40,6 +41,8 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      TZ: Europe/Moscow
     depends_on:
       - postgres
       - clickhouse
@@ -58,6 +61,8 @@ services:
     command: uv run celery -A app.worker.celary_app worker --loglevel=info --pool=solo
     env_file:
       - .env
+    environment:
+      TZ: Europe/Moscow
     depends_on:
       - postgres
       - redis
@@ -75,6 +80,8 @@ services:
     command: uv run celery -A app.worker.celary_app beat --loglevel=info
     env_file:
       - .env
+    environment:
+      TZ: Europe/Moscow
     depends_on:
       - redis
     volumes:
@@ -89,6 +96,8 @@ services:
       - "5555:5555"
     env_file:
       - .env
+    environment:
+      TZ: Europe/Moscow
     depends_on:
       - redis
     volumes:
