@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 class Machine(Base):
     __tablename__ = "machines"  # название таблицы в БД
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # уникальный идентификатор
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)  # CrestWave machine ID (например 35863), задаётся вручную
     serial: Mapped[str] = mapped_column(String, unique=True, nullable=False)  # серийный номер терминала
     name: Mapped[str] = mapped_column(String, nullable=False)  # название мойки
     address: Mapped[str] = mapped_column(String, nullable=True)  # адрес мойки
@@ -20,4 +20,4 @@ class Machine(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)  # дата создания
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)  # дата обновления
 
-    transactions: Mapped[list[Transaction]] = relationship("Transaction", back_populates="machine")  # связь с транзакциями
+    transactions: Mapped[list["Transaction"]] = relationship("Transaction", back_populates="machine")  # связь с транзакциями
