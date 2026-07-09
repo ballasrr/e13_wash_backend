@@ -1,6 +1,10 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
+from sqlalchemy import func, select
 from app.db.clickhouse import get_clickhouse
 from datetime import datetime, timedelta
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.postgres import get_db
+from app.models.transaction import Transaction
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -331,12 +335,12 @@ async def get_daily_summary(
     rows = client.execute(f"""
         SELECT
             report_date,
-            SUM(total) as total,
+            SUM(total_amount) as total,
             SUM(cash) as cash,
             SUM(cashless) as cashless,
             SUM(qr) as qr,
-            SUM(mobile_app) as mobile_app
-        FROM daily_summary
+            SUM(mobile_app_total) as mobile_app
+        FROM financial_report FINAL
         WHERE {where}
         GROUP BY report_date
         ORDER BY report_date DESC
@@ -366,4 +370,123 @@ async def get_daily_summary(
             }
             for r in rows
         ]
+    }
+
+
+@router.get("/dashboard", summary="Сводные данные для дашборда админки")
+async def get_dashboard(
+    machine_id: int = None,
+    period: str = "today",
+    start: str = None,
+    end: str = None,
+    db: AsyncSession = Depends(get_db)
+):
+    now = datetime.now()
+
+    if period == "today":
+        start_date = now.strftime("%Y-%m-%d")
+        end_date = now.strftime("%Y-%m-%d")
+    elif period == "month":
+        start_date = now.replace(day=1).strftime("%Y-%m-%d")
+        end_date = now.strftime("%Y-%m-%d")
+    elif period == "all":
+        start_date = "2020-01-01"
+        end_date = now.strftime("%Y-%m-%d")
+    else:
+        start_date = start[:10] if start else now.replace(day=1).strftime("%Y-%m-%d")
+        end_date = end[:10] if end else now.strftime("%Y-%m-%d")
+
+    # объекты date для PostgreSQL запросов
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+    client = get_clickhouse()
+
+    where = f"report_date BETWEEN '{start_date}' AND '{end_date}'"
+    if machine_id:
+        where += f" AND machine_id = {machine_id}"
+
+    summary_rows = client.execute(f"""
+        SELECT
+            SUM(total_amount) as total,
+            SUM(cash) as cash,
+            SUM(cashless) as cashless,
+            SUM(qr) as qr
+        FROM financial_report FINAL
+        WHERE {where}
+    """)
+    s = summary_rows[0] if summary_rows else (0, 0, 0, 0)
+
+    daily_rows = client.execute(f"""
+        SELECT report_date, SUM(total_amount) as total
+        FROM financial_report FINAL
+        WHERE {where}
+        GROUP BY report_date
+        ORDER BY report_date
+    """)
+    terminal_daily = {r[0].strftime("%Y-%m-%d"): r[1] for r in daily_rows}
+
+    launches_where = f"toDate(event_date) BETWEEN '{start_date}' AND '{end_date}'"
+    if machine_id:
+        launches_where += f" AND machine_id = {machine_id}"
+
+    launches_count_result = client.execute(f"""
+        SELECT COUNT(*) FROM program_launches WHERE {launches_where}
+    """)
+    launches_count = launches_count_result[0][0] if launches_count_result else 0
+
+    client.disconnect()
+
+    query = select(
+        func.date(Transaction.paid_at).label("day"),
+        func.sum(Transaction.paid_amount).label("total")
+    ).where(
+        Transaction.status.in_(["paid", "machine_started"]),
+        func.date(Transaction.paid_at) >= start_date_obj,
+        func.date(Transaction.paid_at) <= end_date_obj,
+    )
+    if machine_id:
+        query = query.where(Transaction.machine_id == machine_id)
+    query = query.group_by(func.date(Transaction.paid_at))
+
+    result = await db.execute(query)
+    app_daily = {row.day.strftime("%Y-%m-%d"): float(row.total or 0) for row in result.all()}
+
+    app_transactions_count_query = select(func.count()).select_from(Transaction).where(
+        Transaction.status.in_(["paid", "machine_started"]),
+        func.date(Transaction.paid_at) >= start_date_obj,
+        func.date(Transaction.paid_at) <= end_date_obj,
+    )
+    if machine_id:
+        app_transactions_count_query = app_transactions_count_query.where(Transaction.machine_id == machine_id)
+
+    app_count_result = await db.execute(app_transactions_count_query)
+    app_washes_count = app_count_result.scalar() or 0
+
+    mobile_app_total = sum(app_daily.values())
+
+    all_dates = sorted(set(terminal_daily.keys()) | set(app_daily.keys()))
+    daily_chart = [
+        {
+            "date": d,
+            "total": terminal_daily.get(d, 0) + app_daily.get(d, 0)
+        }
+        for d in all_dates
+    ]
+
+    total_revenue = (s[0] or 0) + mobile_app_total
+    total_washes = launches_count + app_washes_count
+
+    return {
+        "period": {"type": period, "start": start_date, "end": end_date},
+        "summary": {
+            "total_revenue": total_revenue,
+            "cash": s[1] or 0,
+            "cashless": s[2] or 0,
+            "qr": s[3] or 0,
+            "mobile_app": mobile_app_total,
+            "total_washes": total_washes,
+            "avg_check": round(total_revenue / total_washes, 2) if total_washes else 0,
+        },
+        "daily_chart": daily_chart
     }
