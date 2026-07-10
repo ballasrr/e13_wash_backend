@@ -18,11 +18,20 @@ def get_default_period():
     return start, end
 
 
-@router.get("/preview", summary="Предпросмотр отчёта для фронта")
+def parse_machine_ids(machine_id: str = None):
+    """machine_id может быть пустым (все станции), '35863' (одна) или '35863,35864' (несколько)"""
+    if not machine_id:
+        return None
+    return [int(x.strip()) for x in machine_id.split(",") if x.strip()]
+
+
+@router.get("/preview", summary="Предпросмотр отчёта для фронта (с пагинацией)")
 async def preview_report(
-    machine_id: int,
+    machine_id: str = None,
     start: str = None,
     end: str = None,
+    page: int = 1,
+    page_size: int = 20,
     db: AsyncSession = Depends(get_db)
 ):
     if not start or not end:
@@ -30,18 +39,33 @@ async def preview_report(
     start = start[:10]
     end = end[:10]
 
-    totals, days = await build_report_data(db, machine_id, start, end, refresh_today=True)
+    machine_ids = parse_machine_ids(machine_id)
+    totals, days = await build_report_data(db, machine_ids, start, end, refresh_today=True)
+
+    total_days = len(days)
+    total_pages = (total_days + page_size - 1) // page_size if total_days else 1
+
+    page = max(1, min(page, total_pages))
+    offset = (page - 1) * page_size
+    paginated_days = days[offset:offset + page_size]
 
     return {
         "period": {"start": start, "end": end},
+        "machine_ids": machine_ids,
         "totals": totals,
-        "days": days
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total_items": total_days,
+            "total_pages": total_pages,
+        },
+        "days": paginated_days
     }
 
 
 @router.get("/excel", summary="Скачать финансовый отчёт в Excel")
 async def export_excel(
-    machine_id: int,
+    machine_id: str = None,
     start: str = None,
     end: str = None,
     db: AsyncSession = Depends(get_db)
@@ -51,7 +75,8 @@ async def export_excel(
     start = start[:10]
     end = end[:10]
 
-    totals, days = await build_report_data(db, machine_id, start, end, refresh_today=True)
+    machine_ids = parse_machine_ids(machine_id)
+    totals, days = await build_report_data(db, machine_ids, start, end, refresh_today=True)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -93,7 +118,8 @@ async def export_excel(
     wb.save(output)
     output.seek(0)
 
-    filename = f"report_{machine_id}_{start}_{end}.xlsx"
+    machine_label = machine_id if machine_id else "all"
+    filename = f"report_{machine_label}_{start}_{end}.xlsx"
 
     return StreamingResponse(
         output,
