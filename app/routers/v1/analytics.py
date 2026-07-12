@@ -3,7 +3,7 @@ from app.db.clickhouse import get_clickhouse
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.postgres import get_db
-from app.services.analytics import build_dashboard_data
+from app.services.analytics import build_dashboard_data, get_all_transactions
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -13,6 +13,13 @@ def get_default_period():
     start = now.replace(hour=0, minute=0, second=0).strftime("%Y-%m-%dT%H:%M:%S")
     end = now.strftime("%Y-%m-%dT%H:%M:%S")
     return start, end
+
+
+def parse_machine_ids(machine_id: str = None):
+    """machine_id может быть пустым (все станции), '35863' (одна) или '35863,35864' (несколько)"""
+    if not machine_id:
+        return None
+    return [int(x.strip()) for x in machine_id.split(",") if x.strip()]
 
 
 @router.get("/launches", summary="Запуски программ из ClickHouse")
@@ -381,3 +388,25 @@ async def get_dashboard(
     db: AsyncSession = Depends(get_db)
 ):
     return await build_dashboard_data(db, machine_id, period, start, end)
+
+
+@router.get("/transactions", summary="Все транзакции (терминал + приложение) с пагинацией")
+async def transactions(
+    machine_id: str = None,
+    start: str = None,
+    end: str = None,
+    page: int = 1,
+    page_size: int = 20,
+    db: AsyncSession = Depends(get_db)
+):
+    if not start or not end:
+        now = datetime.now()
+        start = now.replace(day=1).strftime("%Y-%m-%d")
+        end = now.strftime("%Y-%m-%d")
+    else:
+        start = start[:10]
+        end = end[:10]
+
+    machine_ids = parse_machine_ids(machine_id)
+
+    return await get_all_transactions(db, machine_ids, start, end, page, page_size)

@@ -119,3 +119,96 @@ async def build_dashboard_data(db: AsyncSession, machine_id: int, period: str, s
         },
         "daily_chart": daily_chart
     }
+
+
+async def get_all_transactions(
+    db: AsyncSession,
+    machine_ids: list = None,
+    start: str = None,
+    end: str = None,
+    page: int = 1,
+    page_size: int = 20,
+):
+    """Объединённый список транзакций: терминал (ClickHouse) + приложение (Postgres)"""
+
+    client = get_clickhouse()
+    where = f"event_date BETWEEN '{start} 00:00:00' AND '{end} 23:59:59'"
+    if machine_ids:
+        ids_str = ",".join(str(i) for i in machine_ids)
+        where += f" AND machine_id IN ({ids_str})"
+
+    rows = client.execute(f"""
+        SELECT
+            machine_id, machine_name, program_name, total_amount,
+            cash_amount, card_amount, cloud_amount, loyalty_msisdn, event_date
+        FROM program_launches
+        WHERE {where}
+        ORDER BY event_date DESC
+    """)
+    client.disconnect()
+
+    terminal_items = [
+        {
+            "source": "terminal",
+            "machine_id": r[0],
+            "machine_name": r[1],
+            "program_name": r[2],
+            "amount": r[3],
+            "payment_method": "cash" if r[4] > 0 else ("card" if r[5] > 0 else ("qr" if r[6] > 0 else "unknown")),
+            "user_phone": r[7],
+            "datetime": r[8],
+        }
+        for r in rows
+    ]
+
+    start_date = datetime.strptime(start, "%Y-%m-%d").date()
+    end_date = datetime.strptime(end, "%Y-%m-%d").date()
+
+    query = select(Transaction).where(
+        Transaction.status.in_(["paid", "machine_started"]),
+        func.date(Transaction.paid_at) >= start_date,
+        func.date(Transaction.paid_at) <= end_date,
+    )
+    if machine_ids:
+        query = query.where(Transaction.machine_id.in_(machine_ids))
+    query = query.order_by(Transaction.paid_at.desc())
+
+    result = await db.execute(query)
+    app_transactions = result.scalars().all()
+
+    app_items = [
+        {
+            "source": "app",
+            "machine_id": t.machine_id,
+            "machine_name": None,
+            "program_name": t.program_name,
+            "amount": t.paid_amount,
+            "payment_method": t.payment_method_type,
+            "user_phone": None,
+            "datetime": t.paid_at,
+        }
+        for t in app_transactions
+    ]
+
+    all_items = terminal_items + app_items
+    all_items.sort(key=lambda x: x["datetime"] or datetime.min, reverse=True)
+
+    total_items = len(all_items)
+    total_pages = (total_items + page_size - 1) // page_size if total_items else 1
+    page = max(1, min(page, total_pages))
+    offset = (page - 1) * page_size
+    paginated = all_items[offset:offset + page_size]
+
+    for item in paginated:
+        if item["datetime"]:
+            item["datetime"] = item["datetime"].strftime("%Y-%m-%d %H:%M:%S")
+
+    return {
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total_items": total_items,
+            "total_pages": total_pages,
+        },
+        "transactions": paginated
+    }
