@@ -236,6 +236,7 @@ async def get_programs_breakdown(machine_ids: list, start: str, end: str):
     """)
     client.disconnect()
 
+
     return [
         {
             "program_name": r[0],
