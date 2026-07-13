@@ -245,3 +245,4 @@ async def get_programs_breakdown(machine_ids: list, start: str, end: str):
         }
         for r in rows
     ]
+
