@@ -2,6 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.db.clickhouse import get_clickhouse, save_financial_report
 from app.models.transaction import Transaction
+from app.services.analytics import get_programs_breakdown
 from app.services.crestwave import get_machines, get_summary_report
 from datetime import datetime
 
@@ -113,3 +114,10 @@ async def build_report_data(db: AsyncSession, machine_id, start: str, end: str, 
     }
 
     return totals, days
+
+
+async def build_programs_report_data(db: AsyncSession, machine_ids: list, start: str, end: str):
+    """Собрать данные для отчёта по тарифам — согласованная сводка + разбивка по программам"""
+    totals, days = await build_report_data(db, machine_ids, start, end, refresh_today=True)
+    programs = await get_programs_breakdown(machine_ids, start, end)
+    return totals, programs

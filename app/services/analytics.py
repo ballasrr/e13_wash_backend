@@ -212,3 +212,36 @@ async def get_all_transactions(
         },
         "transactions": paginated
     }
+
+
+async def get_programs_breakdown(machine_ids: list, start: str, end: str):
+    """Статистика по тарифам за период — реальные деньги (без бонусов), согласовано с financial_report"""
+    client = get_clickhouse()
+
+    where = f"toDate(event_date) BETWEEN '{start}' AND '{end}'"
+    if machine_ids:
+        ids_str = ",".join(str(i) for i in machine_ids)
+        where += f" AND machine_id IN ({ids_str})"
+
+    rows = client.execute(f"""
+        SELECT
+            program_name,
+            COUNT(*) as launches_count,
+            SUM(cash_amount + card_amount + cloud_amount) as total_revenue,
+            AVG(cash_amount + card_amount + cloud_amount) as avg_price
+        FROM program_launches
+        WHERE {where}
+        GROUP BY program_name
+        ORDER BY launches_count DESC
+    """)
+    client.disconnect()
+
+    return [
+        {
+            "program_name": r[0],
+            "launches_count": r[1],
+            "total_revenue": round(r[2], 2),
+            "avg_price": round(r[3], 2),
+        }
+        for r in rows
+    ]

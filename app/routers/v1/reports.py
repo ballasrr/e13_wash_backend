@@ -18,6 +18,15 @@ def get_default_period():
     return start, end
 
 
+def resolve_period(start: str = None, end: str = None):
+    """Если start не задан — берём начало текущего месяца.
+    Если end не задан — берём сегодня (даже если start задан)."""
+    default_start, _ = get_default_period()
+    resolved_start = (start or default_start)[:10]
+    resolved_end = (end or datetime.now().strftime("%Y-%m-%d"))[:10]
+    return resolved_start, resolved_end
+
+
 def parse_machine_ids(machine_id: str = None):
     """machine_id может быть пустым (все станции), '35863' (одна) или '35863,35864' (несколько)"""
     if not machine_id:
@@ -31,13 +40,10 @@ async def preview_report(
     start: str = None,
     end: str = None,
     page: int = 1,
-    page_size: int = 20,
+    page_size: int = 10,
     db: AsyncSession = Depends(get_db)
 ):
-    if not start or not end:
-        start, end = get_default_period()
-    start = start[:10]
-    end = end[:10]
+    start, end = resolve_period(start, end)
 
     machine_ids = parse_machine_ids(machine_id)
     totals, days = await build_report_data(db, machine_ids, start, end, refresh_today=True)
@@ -70,10 +76,7 @@ async def export_excel(
     end: str = None,
     db: AsyncSession = Depends(get_db)
 ):
-    if not start or not end:
-        start, end = get_default_period()
-    start = start[:10]
-    end = end[:10]
+    start, end = resolve_period(start, end)
 
     machine_ids = parse_machine_ids(machine_id)
     totals, days = await build_report_data(db, machine_ids, start, end, refresh_today=True)
@@ -120,6 +123,67 @@ async def export_excel(
 
     machine_label = machine_id if machine_id else "all"
     filename = f"report_{machine_label}_{start}_{end}.xlsx"
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@router.get("/programs-report/excel", summary="Скачать отчёт по тарифам в Excel")
+async def export_programs_report_excel(
+    machine_id: str = None,
+    start: str = None,
+    end: str = None,
+    db: AsyncSession = Depends(get_db)
+):
+    start, end = resolve_period(start, end)
+    machine_ids = parse_machine_ids(machine_id)
+
+    from app.services.reports import build_programs_report_data
+    summary, programs = await build_programs_report_data(db, machine_ids, start, end)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Тарифы"
+
+    ws.append([f"Период: {start} — {end}"])
+    ws["A1"].font = Font(bold=True, size=14)
+    ws.append([])
+
+    headers = ["Тариф", "Кол-во запусков", "Выручка", "Цена тарифа"]
+    ws.append(headers)
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="2E86AB")
+    for cell in ws[3]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    for p in programs:
+        ws.append([p["program_name"], p["launches_count"], p["total_revenue"], p["avg_price"]])
+
+    # итоговая строка
+    total_launches = sum(p["launches_count"] for p in programs)
+    total_revenue = sum(p["total_revenue"] for p in programs)
+
+    ws.append([])
+    ws.append(["ИТОГО", total_launches, total_revenue, ""])
+    last_row = ws.max_row
+    for cell in ws[last_row]:
+        cell.font = Font(bold=True)
+
+    ws.column_dimensions["A"].width = 20
+    for col in "BCD":
+        ws.column_dimensions[col].width = 18
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    machine_label = machine_id if machine_id else "all"
+    filename = f"programs_report_{machine_label}_{start}_{end}.xlsx"
 
     return StreamingResponse(
         output,
