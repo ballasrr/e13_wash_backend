@@ -1,9 +1,8 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from app.db.clickhouse import get_clickhouse, save_financial_report
+from app.db.clickhouse import get_clickhouse
 from app.models.transaction import Transaction
 from app.services.analytics import get_programs_breakdown
-from app.services.crestwave import get_machines, get_summary_report
 from datetime import datetime
 
 
@@ -32,6 +31,8 @@ async def get_app_payments_by_day(db: AsyncSession, machine_ids: list, start: st
 async def build_report_data(db: AsyncSession, machine_id, start: str, end: str, refresh_today: bool = False):
     """
     Собрать финансовый отчёт — терминал (ClickHouse) + мобильное приложение (Postgres).
+    Читает только уже синхронизированные данные, без прямых запросов к CrestWave
+    (данные обновляются автоматически через Celery каждую минуту).
     machine_id: None (все станции), int (одна станция), list[int] (несколько станций)
     """
     if isinstance(machine_id, int):
@@ -40,21 +41,6 @@ async def build_report_data(db: AsyncSession, machine_id, start: str, end: str, 
         machine_ids = machine_id
     else:
         machine_ids = None  # все станции
-
-    if refresh_today:
-        today = datetime.now().strftime("%Y-%m-%d")
-        if end >= today:
-            machines_data = await get_machines()
-            all_machines = machines_data.get("machines", [])
-            target_machines = all_machines
-            if machine_ids:
-                target_machines = [m for m in all_machines if m["id"] in machine_ids]
-
-            for machine in target_machines:
-                today_start = f"{today}T00:00:00"
-                today_end = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-                report = await get_summary_report(machine["serial"], today_start, today_end)
-                save_financial_report(machine["id"], machine["name"], report)
 
     client = get_clickhouse()
 
@@ -118,6 +104,6 @@ async def build_report_data(db: AsyncSession, machine_id, start: str, end: str, 
 
 async def build_programs_report_data(db: AsyncSession, machine_ids: list, start: str, end: str):
     """Собрать данные для отчёта по тарифам — согласованная сводка + разбивка по программам"""
-    totals, days = await build_report_data(db, machine_ids, start, end, refresh_today=True)
+    totals, days = await build_report_data(db, machine_ids, start, end)
     programs = await get_programs_breakdown(machine_ids, start, end)
     return totals, programs

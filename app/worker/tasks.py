@@ -62,7 +62,6 @@ async def _sync_all():
         launches = launches_data.get("program_launches", [])
         save_program_launches(machine["id"], machine["name"], launches)
 
-        # финансовый отчёт за сегодня
         today_start = datetime.now().replace(hour=0, minute=0, second=0).strftime("%Y-%m-%dT%H:%M:%S")
         today_end = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         summary_report = await get_summary_report(machine["serial"], today_start, today_end)
@@ -82,10 +81,7 @@ async def _sync_all():
 
 @celery_app.task(
     name="app.worker.tasks.sync_historical_task",
-    bind=True,
-    autoretry_for=(Exception,),
-    retry_kwargs={"max_retries": 3},
-    retry_backoff=5
+    bind=True
 )
 def sync_historical_task(self, machine_id: int, start_date: str, end_date: str):
     loop = asyncio.new_event_loop()
@@ -112,24 +108,29 @@ async def _sync_historical(task, machine_id: int, start_date: str, end_date: str
     total_events = 0
     total_launches = 0
     days_done = 0
+    days_failed = []
 
     while current <= end:
         day_start = current.strftime("%Y-%m-%dT00:00:00")
         day_end = current.strftime("%Y-%m-%dT23:59:59")
 
-        events_data = await get_events(machine_id, day_start, day_end)
-        events = events_data.get("events", [])
-        save_device_events(machine_id, machine["name"], events)
+        try:
+            events_data = await get_events(machine_id, day_start, day_end)
+            events = events_data.get("events", [])
+            save_device_events(machine_id, machine["name"], events)
 
-        launches_data = await get_program_launches(machine_id, day_start, day_end)
-        launches = launches_data.get("program_launches", [])
-        save_program_launches(machine_id, machine["name"], launches)
+            launches_data = await get_program_launches(machine_id, day_start, day_end)
+            launches = launches_data.get("program_launches", [])
+            save_program_launches(machine_id, machine["name"], launches)
 
-        summary_report = await get_summary_report(machine["serial"], day_start, day_end)
-        save_financial_report(machine_id, machine["name"], summary_report)
+            summary_report = await get_summary_report(machine["serial"], day_start, day_end)
+            save_financial_report(machine_id, machine["name"], summary_report)
 
-        total_events += len(events)
-        total_launches += len(launches)
+            total_events += len(events)
+            total_launches += len(launches)
+        except Exception as e:
+            days_failed.append(day_start[:10])
+
         days_done += 1
 
         task.update_state(
@@ -140,6 +141,7 @@ async def _sync_historical(task, machine_id: int, start_date: str, end_date: str
                 "total_days": total_days,
                 "total_events": total_events,
                 "total_launches": total_launches,
+                "days_failed": days_failed,
             }
         )
 
@@ -150,4 +152,52 @@ async def _sync_historical(task, machine_id: int, start_date: str, end_date: str
         "days_done": days_done,
         "total_events": total_events,
         "total_launches": total_launches,
+        "days_failed": days_failed,
     }
+
+
+@celery_app.task(
+    name="app.worker.tasks.resync_recent_days_task",
+    autoretry_for=(Exception,),
+    retry_kwargs={"max_retries": 3},
+    retry_backoff=10
+)
+def resync_recent_days_task():
+    """Перепроверить и дозаполнить последние 7 дней — страховка от пропусков синхронизации"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        result = loop.run_until_complete(_resync_recent_days())
+        return result
+    finally:
+        loop.close()
+
+
+async def _resync_recent_days(days_back: int = 14):
+    """Пройтись по последним N дням и перезаписать financial_report + program_launches свежими данными с CrestWave"""
+    machines_data = await get_machines()
+    machines = machines_data.get("machines", [])
+
+    results = []
+    for machine in machines:
+        resynced = 0
+        for day_offset in range(days_back):
+            target_day = datetime.now() - timedelta(days=day_offset)
+            day_start = target_day.strftime("%Y-%m-%dT00:00:00")
+            day_end = target_day.strftime("%Y-%m-%dT23:59:59")
+
+            try:
+                summary_report = await get_summary_report(machine["serial"], day_start, day_end)
+                save_financial_report(machine["id"], machine["name"], summary_report)
+
+                launches_data = await get_program_launches(machine["id"], day_start, day_end)
+                launches = launches_data.get("program_launches", [])
+                save_program_launches(machine["id"], machine["name"], launches)
+
+                resynced += 1
+            except Exception:
+                continue
+
+        results.append({"machine_id": machine["id"], "resynced_days": resynced})
+
+    return results

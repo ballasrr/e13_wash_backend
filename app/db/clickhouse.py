@@ -134,7 +134,9 @@ def save_program_launches(machine_id: int, machine_name: str, launches: list):
         loyalty_card_amount = float(payment.get("loyalty_card_amt", 0) or 0)
         total_amount = float(launch.get("payment_type_description", {}).get("total_amt", 0) or 0)
 
-        raw_key = f"{machine_id}|{event_date}|{program_id}|{program_name}|{total_amount}|{loyalty_msisdn}|{cash_amount}|{card_amount}"
+        # ключ БЕЗ loyalty_msisdn — иначе одна и та же транзакция с замаскированным
+        # и реальным номером телефона считается двумя разными записями и задваивается
+        raw_key = f"{machine_id}|{event_date}|{program_id}|{program_name}|{total_amount}|{cash_amount}|{card_amount}"
         unique_id = hashlib.md5(raw_key.encode()).hexdigest()
 
         rows.append((
@@ -175,7 +177,6 @@ def save_financial_report(machine_id: int, machine_name: str, report: list):
         if not date_str:
             continue
 
-        # берём только дату YYYY-MM-DD, отбрасывая время
         day_key = date_str[:10]
 
         if day_key not in daily:
